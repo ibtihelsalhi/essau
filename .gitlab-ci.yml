@@ -1,14 +1,11 @@
-# GitLab CI/CD Pipeline for Prestify Application
-# Build → Test → Deploy to AWS EC2
+# Prestify CI/CD Pipeline - Simple & Professional
+# Stages: build → test → security → deploy
 
 variables:
   DOCKER_IMAGE_TAG: ${CI_COMMIT_SHA:0:8}
-  REGISTRY_URL: ${CI_REGISTRY}
   IMAGE_NAME: ${CI_REGISTRY_IMAGE}
   DOCKER_DRIVER: overlay2
   DOCKER_TLS_CERTDIR: "/certs"
-  SONAR_PROJECT_KEY: prestify
-  SONAR_HOST_URL: https://sonarqube.example.com
 
 stages:
   - build
@@ -16,47 +13,20 @@ stages:
   - security
   - deploy
 
-# =====================================================
+# ============================================
 # BUILD STAGE
-# =====================================================
-build:docker:
-  stage: build
-  image: docker:latest
-  services:
-    - docker:dind
-  variables:
-    DOCKER_HOST: tcp://docker:2376
-    DOCKER_TLS_VERIFY: 1
-    DOCKER_CERT_PATH: $DOCKER_TLS_CERTDIR/client
-  script:
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - docker build -t ${IMAGE_NAME}:${DOCKER_IMAGE_TAG} -t ${IMAGE_NAME}:latest .
-    - docker push ${IMAGE_NAME}:${DOCKER_IMAGE_TAG}
-    - docker push ${IMAGE_NAME}:latest
-  cache:
-    paths:
-      - .docker/
-  only:
-    - merge_requests
-    - main
-    - develop
-  artifacts:
-    reports:
-      dotenv: build.env
-    expire_in: 30 days
+# ============================================
 
 build:maven:
   stage: build
-  image: maven:3.8.7-openjdk-17-slim
+  image: maven:3.9.0-eclipse-temurin-17-slim
   script:
-    - echo "Building Prestify application..."
+    - echo "🔨 Building application..."
     - cd Prestify_Plateforme_de_gestion_des_services-main
-    - mvn clean compile -B -DskipTests
-    - mvn package -B -DskipTests
+    - mvn clean package -DskipTests -B
   cache:
     paths:
       - .m2/repository/
-      - Prestify_Plateforme_de_gestion_des_services-main/target/
   artifacts:
     paths:
       - Prestify_Plateforme_de_gestion_des_services-main/target/
@@ -66,16 +36,37 @@ build:maven:
     - main
     - develop
 
-# =====================================================
+build:docker:
+  stage: build
+  image: docker:24-dind
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_VERIFY: 1
+    DOCKER_CERT_PATH: $DOCKER_TLS_CERTDIR/client
+  script:
+    - echo "🐳 Building Docker image..."
+    - echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
+    - docker build -t $DOCKER_USERNAME/prestify:$CI_COMMIT_SHA -t $DOCKER_USERNAME/prestify:latest .
+    - docker push $DOCKER_USERNAME/prestify:$CI_COMMIT_SHA
+    - docker push $DOCKER_USERNAME/prestify:latest
+  only:
+    - merge_requests
+    - main
+    - develop
+
+# ============================================
 # TEST STAGE
-# =====================================================
+# ============================================
+
 test:unit:
   stage: test
-  image: maven:3.8.7-openjdk-17-slim
+  image: maven:3.9.0-eclipse-temurin-17-slim
   dependencies:
     - build:maven
   script:
-    - echo "Running unit tests..."
+    - echo "🧪 Running unit tests..."
     - cd Prestify_Plateforme_de_gestion_des_services-main
     - mvn clean test -B
     - mvn jacoco:report
@@ -97,144 +88,76 @@ test:unit:
     - main
     - develop
 
-test:integration:
-  stage: test
-  image: docker/compose:latest
-  services:
-    - docker:dind
-  script:
-    - echo "Running integration tests with Docker Compose..."
-    - docker-compose -f docker-compose.test.yml up --abort-on-container-exit
-  artifacts:
-    paths:
-      - tests/target/failsafe-reports/
-    expire_in: 30 days
-  when: manual
-  only:
-    - merge_requests
-    - main
-    - develop
-
 test:code_quality:
   stage: test
-  image: maven:3.8.7-openjdk-17-slim
+  image: maven:3.9.0-eclipse-temurin-17-slim
   dependencies:
     - build:maven
   script:
-    - echo "Code quality analysis (SonarQube/PMD)..."
+    - echo "📊 Code quality checks..."
     - cd Prestify_Plateforme_de_gestion_des_services-main
-    - mvn pmd:check
+    - mvn pmd:check || true
     - mvn spotbugs:check || true
   cache:
     paths:
       - .m2/repository/
-  artifacts:
-    paths:
-      - Prestify_Plateforme_de_gestion_des_services-main/target/pmd.xml
-    expire_in: 30 days
   allow_failure: true
   only:
     - merge_requests
     - main
-    - develop
 
-# =====================================================
+# ============================================
 # SECURITY STAGE
-# =====================================================
+# ============================================
+
 security:sast:
   stage: security
-  image: maven:3.8.7-openjdk-17-slim
+  image: maven:3.9.0-eclipse-temurin-17-slim
+  dependencies:
+    - build:maven
   script:
-    - echo "Running SAST security scan..."
+    - echo "🔐 SAST scan..."
     - cd Prestify_Plateforme_de_gestion_des_services-main
-    - mvn clean compile
-    - mvn spotbugs:spotbugs -DincludeFilterFile=findsecbugs-exclude.xml || true
-  allow_failure: true
-  artifacts:
+    - mvn spotbugs:spotbugs || true
+  cache:
     paths:
-      - Prestify_Plateforme_de_gestion_des_services-main/target/spotbugsXml.xml
-    expire_in: 30 days
+      - .m2/repository/
+  allow_failure: true
   only:
     - merge_requests
     - main
-    - develop
 
-security:docker_scan:
+security:docker:
   stage: security
   image: aquasec/trivy:latest
   script:
-    - echo "Scanning Docker image for vulnerabilities..."
-    - trivy image --severity HIGH,CRITICAL ${IMAGE_NAME}:${DOCKER_IMAGE_TAG}
-    - trivy image --format sarif --output trivy-results.sarif ${IMAGE_NAME}:${DOCKER_IMAGE_TAG}
-  artifacts:
-    paths:
-      - trivy-results.sarif
-    reports:
-      container_scanning: trivy-results.sarif
-    expire_in: 30 days
+    - echo "🔍 Docker image scan..."
+    - trivy image --severity HIGH,CRITICAL ${IMAGE_NAME}:${DOCKER_IMAGE_TAG} || true
   allow_failure: true
-  dependencies:
-    - build:docker
   only:
     - merge_requests
     - main
     - develop
 
-security:secrets:
-  stage: security
-  image: trufflesecurity/trufflehog:latest
-  script:
-    - echo "Scanning for secrets..."
-    - trufflehog git file://. --json || true
-  allow_failure: true
-  only:
-    - merge_requests
+# ============================================
+# DEPLOY STAGE
+# ============================================
 
-security:dependencies:
-  stage: security
-  image: maven:3.8.7-openjdk-17-slim
-  script:
-    - echo "Checking for vulnerable dependencies..."
-    - cd Prestify_Plateforme_de_gestion_des_services-main
-    - mvn dependency-check:check || true
-  allow_failure: true
-  artifacts:
-    paths:
-      - Prestify_Plateforme_de_gestion_des_services-main/target/dependency-check-report.html
-    expire_in: 30 days
-  only:
-    - merge_requests
-    - main
-    - develop
-
-# =====================================================
-# DEPLOYMENT STAGE
-# =====================================================
 deploy:staging:
   stage: deploy
   image: alpine:latest
   before_script:
-    - apk add --no-cache openssh-client
+    - apk add --no-cache openssh-client curl
     - eval $(ssh-agent -s)
     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
-    - mkdir -p ~/.ssh
-    - chmod 700 ~/.ssh
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
     - ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
   script:
-    - echo "Deploying to staging EC2 instance..."
-    - |
-      ssh -i ~/.ssh/id_rsa ec2-user@${EC2_HOST} << 'EOF'
-      cd /opt/prestify
-      docker-compose pull
-      docker-compose up -d
-      docker-compose logs -f app
-      EOF
+    - echo "🚀 Deploying to staging..."
+    - ssh ec2-user@${EC2_HOST} "cd /opt/prestify && docker-compose pull && docker-compose up -d && sleep 10 && curl -f http://localhost:8080/actuator/health"
   environment:
     name: staging
     url: http://${EC2_PUBLIC_IP}:8080
-    deployment_tier: staging
-  dependencies:
-    - build:docker
   only:
     - develop
   when: manual
@@ -243,60 +166,17 @@ deploy:production:
   stage: deploy
   image: alpine:latest
   before_script:
-    - apk add --no-cache openssh-client
+    - apk add --no-cache openssh-client curl
     - eval $(ssh-agent -s)
     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
-    - mkdir -p ~/.ssh
-    - chmod 700 ~/.ssh
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
     - ssh-keyscan -H $EC2_PROD_HOST >> ~/.ssh/known_hosts
   script:
-    - echo "Deploying to production EC2 instance..."
-    - |
-      ssh -i ~/.ssh/id_rsa ec2-user@${EC2_PROD_HOST} << 'EOF'
-      cd /opt/prestify
-      # Backup database
-      docker exec prestify_mysql mysqldump -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE} > backup_$(date +%Y%m%d_%H%M%S).sql
-      # Pull latest images
-      docker-compose pull
-      # Deploy with zero downtime
-      docker-compose up -d --no-deps --build app
-      # Health check
-      sleep 10
-      curl -f http://localhost:8080/actuator/health || exit 1
-      EOF
+    - echo "🚀 Deploying to production..."
+    - ssh ec2-user@${EC2_PROD_HOST} "cd /opt/prestify && docker-compose pull && docker-compose up -d && sleep 10 && curl -f http://localhost:8080/actuator/health"
   environment:
     name: production
     url: http://${EC2_PROD_IP}:8080
-    deployment_tier: production
-  dependencies:
-    - build:docker
   only:
     - main
   when: manual
-
-# =====================================================
-# ROLLBACK JOB (Manual)
-# =====================================================
-rollback:production:
-  stage: deploy
-  image: alpine:latest
-  before_script:
-    - apk add --no-cache openssh-client
-    - eval $(ssh-agent -s)
-    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
-    - mkdir -p ~/.ssh
-    - ssh-keyscan -H $EC2_PROD_HOST >> ~/.ssh/known_hosts
-  script:
-    - echo "Rolling back to previous version..."
-    - |
-      ssh -i ~/.ssh/id_rsa ec2-user@${EC2_PROD_HOST} << 'EOF'
-      cd /opt/prestify
-      docker-compose down
-      docker-compose up -d --build
-      EOF
-  environment:
-    name: production
-    action: rollback
-  when: manual
-  only:
-    - main

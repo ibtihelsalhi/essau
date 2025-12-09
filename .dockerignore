@@ -1,0 +1,76 @@
+# Build artifacts
+target/
+build/
+dist/
+*.jar
+*.war
+*.ear
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+*.project
+*.classpath
+*.c9/
+
+# Build tools
+.maven/
+*.m2
+node_modules/
+package-lock.json
+yarn.lock
+
+# CI/CD
+.gitlab-ci.yml
+.github/
+.circleci/
+Jenkinsfile
+
+# Documentation
+*.md
+docs/
+README.md
+CHANGELOG.md
+LICENSE
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files (keep only .env.example)
+.env
+.env.local
+.env.*.local
+
+# Docker files (exclude from runtime image)
+docker-compose.*.yml
+Dockerfile
+.dockerignore
+
+# Testing
+tests/
+test-results/
+coverage/
+.nyc_output/
+
+# Misc
+.directory
+.gradle/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/

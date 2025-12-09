@@ -22,10 +22,12 @@ services:
 
   # Prestify Spring Boot Application
   prestify_app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${DOCKER_USERNAME:-your_username}/prestify:latest
     container_name: prestify_app
+    # Pour dev local (décommente si besoin):
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     environment:
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-prestify_db}
       SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:-prestify_user}
