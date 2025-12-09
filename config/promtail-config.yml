@@ -1,0 +1,64 @@
+server:
+  http_listen_port: 9080
+  log_level: info
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Docker logs from Prestify app
+  - job_name: prestify_app_logs
+    docker: {}
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        target_label: container_name
+      - source_labels: ['__meta_docker_container_image_name']
+        target_label: image_name
+      - source_labels: ['__meta_docker_container_id']
+        target_label: container_id
+        regex: '(.{12}).*'
+        replacement: '${1}'
+      - action: keep
+        regex: 'prestify_.*'
+        source_labels: ['container_name']
+
+  # Application logs from file
+  - job_name: prestify_file_logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: prestify
+          __path__: /logs/*.log
+    pipeline_stages:
+      - multiline:
+          line_start_pattern: '^\d{4}-\d{2}-\d{2}'
+      - regex:
+          expression: '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)\s+(?P<level>\w+)\s+(?P<logger>[\w.]+)\s+-\s+(?P<message>.*)$'
+      - labels:
+          level:
+          logger:
+
+  # MySQL logs
+  - job_name: mysql_logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: mysql
+          __path__: /var/lib/mysql/error.log
+    relabel_configs:
+      - source_labels: ['job']
+        target_label: service
+
+  # System logs
+  - job_name: system_logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: system
+          __path__: /var/log/syslog

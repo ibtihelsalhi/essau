@@ -1,0 +1,165 @@
+services:
+  # MySQL Database Service
+  mysql:
+    image: mysql:8.0
+    container_name: prestify-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-prestify_db}
+      MYSQL_USER: ${MYSQL_USER:-prestify_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-prestify_pass}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - prestify_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Prestify Spring Boot Application
+  prestify_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: prestify_app
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-prestify_db}
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:-prestify_user}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:-prestify_pass}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: ${JPA_DDL_AUTO:-update}
+      SPRING_APPLICATION_NAME: prestify
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: metrics,prometheus
+      MANAGEMENT_METRICS_EXPORT_PROMETHEUS_ENABLED: "true"
+      LOGGING_LEVEL_ROOT: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - prestify_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Prometheus Monitoring
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: prestify_prometheus
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    environment:
+      TZ: UTC
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+    networks:
+      - prestify_network
+    restart: unless-stopped
+
+  # Loki Log Aggregation (DISABLED - Config issues with WAL)
+  # loki:
+  #   image: grafana/loki:2.9.3
+  #   container_name: prestify_loki
+  #   ports:
+  #     - "${LOKI_PORT:-3100}:3100"
+  #   volumes:
+  #     - ./config/loki-simple-config.yml:/etc/loki/local-config.yaml:ro
+  #     - loki_data:/loki
+  #   environment:
+  #     TZ: UTC
+  #   command: -config.file=/etc/loki/local-config.yaml
+  #   networks:
+  #     - prestify_network
+  #   restart: unless-stopped
+
+  # Promtail Log Collector (DISABLED - Depends on Loki)
+  # promtail:
+  #   image: grafana/promtail:2.9.3
+  #   container_name: prestify_promtail
+  #   volumes:
+  #     - ./config/promtail-simple-config.yml:/etc/promtail/config.yml:ro
+  #     - /var/lib/docker/containers:/var/lib/docker/containers:ro
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - ./logs:/logs:ro
+  #   environment:
+  #     HOSTNAME: prestify_host
+  #     TZ: UTC
+  #   command: -config.file=/etc/promtail/config.yml
+  #   networks:
+  #     - prestify_network
+  #   restart: unless-stopped
+
+  # Grafana Dashboard
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: prestify_grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      TZ: UTC
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./config/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - prestify_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # phpMyAdmin - MySQL Database Management
+  phpmyadmin:
+    image: phpmyadmin:5.2.1
+    container_name: prestify_phpmyadmin
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: ${MYSQL_USER:-prestify_user}
+      PMA_PASSWORD: ${MYSQL_PASSWORD:-prestify_pass}
+      PMA_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+    ports:
+      - "8081:80"
+    depends_on:
+      - mysql
+    networks:
+      - prestify_network
+    restart: unless-stopped
+
+networks:
+  prestify_network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  loki_data:
+    driver: local
+  grafana_data:
+    driver: local
